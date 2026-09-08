@@ -1,0 +1,5 @@
+queue.txt
+prompts/
+state/
+logs/
+*.env

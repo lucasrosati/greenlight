@@ -1,0 +1,6 @@
+# queue.txt — one task-id per line; "#" starts a comment; blank lines are ignored.
+# The runner requires prompts/<TASK>.md for every pending task before running any of them.
+# Order = execution order (serial). Tasks listed in state/done.txt are skipped.
+TASK-101
+TASK-102   # depends on TASK-101 (merged first — the queue is serial by design)
+TASK-103
