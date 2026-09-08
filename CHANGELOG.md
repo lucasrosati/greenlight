@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Babysit contract: `DEFERRED_FINDINGS=<n>` marker surfaced at handover (comment, warn log,
+  `deferred=n` annotation on the `babysat` line; older 4-column lines still parse). Never
+  blocks the merge.
+- Babysit clean-tree violation: leftover status/diffs/untracked list saved to
+  `logs/<TASK>-babysit-leftover.diff` before the runner stops; files named in the error.
+- `BABYSIT_DELAY_S` (default 0): wait between the green gate and the babysit for late review bots.
+- `SYNC_COMMAND` exercised in the smoke harness: success, non-zero exit (points at
+  `logs/env-sync.log`), and versioned-file dirt all behave as documented.
+- Docs: lessons from production runs and a design sketch for `stream-json` in-flight visibility.
 - Parity smoke passed against a scratch repo with real CI (two named checks) and a real
   babysit command: PR detection by marker, gate by name, babysit push → re-gate on the new
   sha, SIGTERM + resume without repeating the babysit, human push → gate-only redo, squash

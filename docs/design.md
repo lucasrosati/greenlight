@@ -99,6 +99,38 @@ stops. Two lessons shaped the contract:
 - **Editing the runner**: avoid substring replacement with a non-unique anchor (`run_task() {`
   also matches `step_run_task() {`). Rewrite whole functions.
 
+## Lessons from production runs
+
+Four gaps observed in real queues, and what changed because of them:
+
+- **Deferred findings had no channel.** A babysit that correctly defers author decisions left
+  the handover saying "ready for merge" while the PR carried open findings. Now the babysit
+  reports `DEFERRED_FINDINGS=<n>`; the runner surfaces n in the handover message, the log and
+  the `deferred=n` annotation on the `babysat` phase. The flow does not change: the merge is
+  still the human's call, informed instead of surprised. `BABYSIT_DELAY_S` addresses the related
+  timing problem of review bots that comment after the gate goes green.
+- **A dirty tree after the babysit was caught but not explained.** The invariant "never clean"
+  held; the human still had to reconstruct what the agent left behind. The runner now saves
+  status, diffs and the untracked list to `logs/<TASK>-babysit-leftover.diff` before dying, and
+  the prompt contract states the clean-tree clause explicitly.
+- **Permission denials inflate turns and cost.** The allow list is reviewed against the
+  aggregated `permission_denials` of real sessions, widening only exact, repeatable, recoverable
+  forms; compound shapes (`cd … &&`, `$(…)`, `> file`) stay denied by design and are handled by
+  the shell rules in the prompts.
+- **Environment sync was validated only by dry-run.** `SYNC_COMMAND` is now exercised in the
+  smoke harness with a fake install/codegen script covering success, non-zero exit, and output
+  written to a versioned path.
+
+### Follow-up: in-flight visibility (`stream-json`)
+
+Today a task session is opaque until it ends. Design sketch, not implemented: run the executor
+with `--output-format stream-json`, tee the stream to `logs/<TASK>.stream.jsonl`, and derive the
+final result object (the last `result` event) into `logs/<TASK>.json` so PR detection and the
+success checks stay unchanged; emit one runner log line per milestone tool call (git commit/push,
+gh pr create) and, optionally (`TASK_PROGRESS_COMMENTS=1`), an Orca comment every N turns. The
+parse must tolerate partial streams on timeout. Deferred until the parser can be tested against
+the harness end to end.
+
 ## Non-goals
 
 - Parallel tasks or worktrees per task. Serial is the point: each task sees the previous merge.

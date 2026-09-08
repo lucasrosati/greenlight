@@ -84,6 +84,8 @@ working tree (untracked included) · required checks resolved per `CHECKS_MODE` 
 | `prompt(s) missing ...` at boot | `prompts/<TASK>.md` absent | write the prompt; nothing ran |
 | `dirty working tree in REPO_DIR` | leftover from a previous session or manual work | resolve by hand (commit/stash/discard); the runner never cleans |
 | `pull --ff-only` failed | local base branch diverged | `git -C $REPO_DIR status`; resolve; rerun |
+| `SYNC_COMMAND failed (see logs/env-sync.log)` | install/codegen exited non-zero | read `logs/env-sync.log`; fix the environment; rerun (nothing else ran) |
+| `SYNC_COMMAND dirtied the working tree` | codegen wrote to a versioned path | discard by hand; make the generated output gitignored or move it; rerun |
 | `task session exceeded TASK_TIMEOUT_S` (exit 142) | long or stuck task | read the partial `logs/<TASK>.json`; raise `--task-timeout`; rerun |
 | `task session did not succeed (subtype=...)` | session error | read `logs/<TASK>.json` and `.err`; rerun re-runs the task |
 | `no PR detected` / `ambiguous fallback` | no `PR_NUMBER=` and branch without the task-id | `gh pr list`; record `opened` by hand in `prs.txt` or close the duplicate; rerun |
