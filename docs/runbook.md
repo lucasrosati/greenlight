@@ -140,9 +140,17 @@ recovers, but a dozen denials in a row is a wasted session).
 | `> file` redirects (`npx jest > out.log 2>&1`) | write redirect | `npx jest 2>&1 \| tail -40` |
 | one-liner with assignment (`S=$(date) && git checkout -b "x-$S" && …`) | not matched | separate commands |
 | inline functions (`f() { … }`), `eval`, `sed -i` | not matched / by design | separate commands; edit with the Edit tool |
-| `grep`/`sed` on `.env.example` | `Read(**/.env.*)` deny also catches `.example` | do not work around it; note it in the PR body as pending, or replace the glob deny with an explicit list of secret files |
+| `grep`/`sed` on `.env.example` | a glob deny like `Read(**/.env.*)` also catches `.example` | the example settings deny an explicit list of secret files (`.env`, `.env.local`, `.env.development`, `.env.production`, `.env.staging`, `.env.test`, `.env.bak`, `.env.backup`) so `.env.example` stays editable; tell the prompt to never read `.env*` other than `.env.example` even when allowed |
+| `pnpm -C <pkg> …`, `pnpm --dir <pkg> …`, `pnpm --filter <pkg> …` | measured: a global flag before the subcommand breaks the `pnpm <sub>:*` prefix (`pnpm install --filter x` passes the matcher, but only means something in a workspace) | `cd <pkg> && npx <tool> …` or `npx <tool> --rootDir <pkg> …` |
+| Write into `.git/…` or `/tmp/…` (PR body, reply, commit message) | writes outside the working tree (and into `.git/`) are denied | a gitignored dir inside the repo (e.g. `tmp/`), checked with `git check-ignore`; if the repo has none, the prompt must stop and report, never edit `.gitignore` on its own |
+| backticks or `$(` inside an inline argument (`gh api -f body='… \`sha\` …'`) | read as command substitution | write the text to a file and pass `--body-file` / `-F body=@file` |
+| env prefix (`VAR=x cmd`), `export VAR; cmd`, `env PATH=… cmd` | the matcher sees the assignment/`export`/`env` as the command | pass the tool's CLI flag instead |
+| `${PIPESTATUS[0]}` / `${pipestatus[0]}` after a pipe | parameter expansion in the command | run the tool without a pipe when the exit code matters |
 | `npm …` in a pnpm repo | not in the allow list on purpose | `pnpm …` |
 | `sed` with `\x1b`/bracket escapes inside a pipe | denied without an isolated cause | avoid; filter with `grep`/`cut` |
+
+Note on measurement: these rows come from an aggregate of 105 denials across nine real sessions and one
+probe session; the prompts that carried the rules above went from 18–28 denials per task to 5.
 
 **Pass** (measured): `2>/dev/null`, `2>&1 | head`, `sed 's/a/b/'`, `cut`, `sort`, `R=x; ls $R`,
 globs, `--include`, chains with `;`, plain `git <sub>`, `gh pr create/view/list/checks/diff/comment`,

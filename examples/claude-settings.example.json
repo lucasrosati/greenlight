@@ -77,9 +77,21 @@
       "Bash(orca automations:*)",
       "Bash(orca orchestration:*)",
       "Read(.env)",
-      "Read(.env.*)",
+      "Read(.env.local)",
+      "Read(.env.development)",
+      "Read(.env.production)",
+      "Read(.env.staging)",
+      "Read(.env.test)",
+      "Read(.env.bak)",
+      "Read(.env.backup)",
       "Read(**/.env)",
-      "Read(**/.env.*)",
+      "Read(**/.env.local)",
+      "Read(**/.env.development)",
+      "Read(**/.env.production)",
+      "Read(**/.env.staging)",
+      "Read(**/.env.test)",
+      "Read(**/.env.bak)",
+      "Read(**/.env.backup)",
       "Read(**/creds.json)"
     ]
   }
