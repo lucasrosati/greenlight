@@ -102,6 +102,20 @@ The permission matcher matches by **form**, and several common shapes are denied
 every command in them is allowed. Read the gotchas in [docs/runbook.md](docs/runbook.md#headless-shell-gotchas)
 before writing prompts.
 
+## Auto-merge is a design decision, not a missing feature
+
+greenlight will not merge a PR, and will not grow a flag to do so. A green gate is a
+precondition for handover, not proof of readiness: a review bot can defer a finding to the
+author, a renamed job can turn a gate green by absence, and only a human reads the threads.
+The runner's job ends at "the ball is with you". See [docs/design.md](docs/design.md#non-goals)
+before opening an issue or PR that adds merging.
+
+## Contributing
+
+Issues and PRs are welcome for bugs, portability (bash 3.2 stays a requirement), new
+`CHECKS_MODE` sources and doc fixes. Run `bash -n` on every script and a `--dry-run` against a
+scratch repo before sending; a smoke harness for full runs is on the roadmap.
+
 ## Docs
 
 - [docs/runbook.md](docs/runbook.md) — stop, resume, phase table, failure modes, state cleanup, shell gotchas.
