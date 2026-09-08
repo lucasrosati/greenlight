@@ -12,7 +12,7 @@ greenlight/
 ├── queue.txt                  # the queue (1 task-id per line; "#" comments)
 ├── prompts/<TASK>.md          # one prompt per task (gitignored)
 ├── state/done.txt             # finished task-ids (1 per line)
-├── state/prs.txt              # TASK<TAB>PR<TAB>PHASE<TAB>GATED_SHA (append-only; last line wins)
+├── state/prs.txt              # TASK<TAB>PR<TAB>PHASE<TAB>GATED_SHA[<TAB>deferred=n] (append-only; last line wins)
 ├── state/runner.pid           # only while running
 └── logs/                      # runner.log · <TASK>.json/.err · <TASK>-babysit.out · <TASK>-checks.log
 ```
@@ -68,8 +68,9 @@ working tree (untracked included) · required checks resolved per `CHECKS_MODE` 
                 the lowercase task-id AND createdAt > start; >1 candidate = abort) → PR OPEN, head ≠ base
                                                                                     → phase opened
 4 CI gate       single ci_gate function (see README)                                → phase gated
-5 babysit       BABYSIT_COMMAND once; back to base; if headRefOid moved → ci_gate again
-                                                                                    → phase babysat
+5 babysit       [sleep BABYSIT_DELAY_S] BABYSIT_COMMAND once; DEFERRED_FINDINGS=<n> marker read;
+                clean tree required (leftover saved otherwise); back to base;
+                if headRefOid moved → ci_gate again                                 → phase babysat (deferred=n)
 6 handover      status in-review + comment; polling gh pr view --json state
 7 manual merge  MERGED → continue · CLOSED → abort the queue · OPEN → sleep
 8 post-merge    checkout base + pull --ff-only; mergeCommit ⊂ local HEAD             → phase merged
@@ -93,12 +94,26 @@ working tree (untracked included) · required checks resolved per `CHECKS_MODE` 
 | `CI gate by COUNT` warn on every gate | `CHECKS_MODE=count` | expected in scratch repos; in production prefer `names` or `list` |
 | `CHECKS_JQ_FILTER produced no check names` | source file or filter changed | run `jq -rRs "$CHECKS_JQ_FILTER" $REPO_DIR/$CHECKS_SOURCE` by hand |
 | `head of PR moved DURING the gate` | concurrent push | rerun (redoes only the gate) |
-| `babysit left the working tree dirty` | babysit did not commit | resolve by hand; rerun does not repeat the babysit |
+| `babysit violated the clean-tree contract` | babysit changed files without commit/revert | read `logs/<TASK>-babysit-leftover.diff`; commit, push or discard by hand; the phase is still `gated`, so the rerun runs the babysit again (at least once) |
+| `handover: ... with N deferred finding(s)` | babysit deferred review findings to the author | not a failure: read the PR threads and decide before merging |
 | `gh pr view failed 5 times in a row` | gh/network/API down | warns from the 3rd; rerun resumes at `babysat` |
 | `PR #N was CLOSED without merge` | human decision | clear the task's lines in `prs.txt` (new PR) or drop it from the queue |
 | `merge commit ... is NOT in local <base>` | base diverged after merge | `git -C $REPO_DIR log`; resolve; rerun (PR MERGED → only persists) |
 | `WARN: orca cannot resolve worktree` | repo not managed by Orca | expected outside Orca; set `ORCA_ENABLED=0` to silence |
 | `orca CLI not found` | runner outside an Orca terminal | expected; reporting becomes a no-op |
+
+## Babysit timing and deferred findings
+
+A review bot that comments minutes after the PR opens can arrive after the babysit already
+ran. `BABYSIT_DELAY_S` (default 0) sleeps between the green gate and the babysit so those
+comments land first. The trade-off is a fixed delay on every task versus a babysit that is blind
+to late reviews; pick a value from the bot's typical latency, not a worst case. Reviews that
+arrive **after** the babysit are, by design, the human's responsibility at merge time: the
+babysit runs at most once.
+
+Findings the babysit defers to the author are surfaced through the `DEFERRED_FINDINGS=<n>`
+marker (see the prompt contract). `state/prs.txt` records `deferred=n` on the `babysat` line;
+lines written before this annotation existed have four columns and still parse.
 
 ## State cleanup
 

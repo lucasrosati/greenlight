@@ -59,6 +59,7 @@ default and a full worked example.
 | `SYNC_COMMAND` | *(empty)* | run in `REPO_DIR` after each clean base (install, codegen) |
 | `CHECKS_MODE` | `count` | `count` \| `names` \| `list` — see below |
 | `BABYSIT_COMMAND` | *(empty = skip)* | run once per PR after the first green gate |
+| `BABYSIT_DELAY_S` | 0 s | wait between the green gate and the babysit (late review bots) |
 | `POLL_INTERVAL` / `--poll-interval` | 60 s | merge polling interval |
 | `TASK_TIMEOUT_S` / `--task-timeout` | 3600 s | ceiling per task session |
 | `BABYSIT_TIMEOUT_S` / `--babysit-timeout` | 1800 s | ceiling for the babysit command |
@@ -90,6 +91,12 @@ mode name-based gating exists to catch.
 session that fixes red CI and applies objective review-bot comments, then pushes. If the head
 moved, the full gate re-runs on the new sha. The phase is recorded before the re-gate, so a rerun
 never repeats the babysit. Empty command = skipped with a log line.
+
+Two contract clauses apply to the command (details in [docs/prompt-contract.md](docs/prompt-contract.md)):
+it must exit with a clean tree (otherwise the runner saves the leftover diff and stops), and it may
+print `DEFERRED_FINDINGS=<n>` for review findings it left to the author, which changes the handover
+message to "ready, with n deferred finding(s) awaiting your judgment". Findings never block the
+merge; they are surfaced so the human reads the threads before deciding.
 
 ## Headless permissions
 

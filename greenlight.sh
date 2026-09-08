@@ -82,6 +82,7 @@ POLL_INTERVAL="${POLL_INTERVAL:-60}"
 SKIP_BABYSIT="${SKIP_BABYSIT:-0}"
 TASK_TIMEOUT_S="${TASK_TIMEOUT_S:-3600}"
 BABYSIT_TIMEOUT_S="${BABYSIT_TIMEOUT_S:-1800}"
+BABYSIT_DELAY_S="${BABYSIT_DELAY_S:-0}"             # wait between the green gate and the babysit (review bots that comment late)
 CHECKS_APPEAR_TRIES="${CHECKS_APPEAR_TRIES:-20}"    # × CHECKS_APPEAR_SLEEP_S waiting for check-runs to exist
 CHECKS_APPEAR_SLEEP_S="${CHECKS_APPEAR_SLEEP_S:-15}"
 POLL_FAILS_WARN="${POLL_FAILS_WARN:-3}"
@@ -93,6 +94,7 @@ CUR_TASK="-"
 CUR_STEP="boot"
 CUR_PR=""
 GATED_SHA=""
+DEFERRED_N=0     # DEFERRED_FINDINGS=<n> reported by the babysit (0 = none/not reported)
 TASK_START_TS=""
 INTERRUPTED=0
 FINISHED=0   # bash 3.2: a `set -u` error exits with status 0 inside the trap — this flag closes that hole
@@ -171,6 +173,7 @@ parse_args() {
   [[ "$POLL_INTERVAL" =~ ^[0-9]+$ ]] || die "--poll-interval must be an integer (got: $POLL_INTERVAL)"
   [[ "$TASK_TIMEOUT_S" =~ ^[0-9]+$ ]] || die "--task-timeout must be an integer (got: $TASK_TIMEOUT_S)"
   [[ "$BABYSIT_TIMEOUT_S" =~ ^[0-9]+$ ]] || die "--babysit-timeout must be an integer (got: $BABYSIT_TIMEOUT_S)"
+  [[ "$BABYSIT_DELAY_S" =~ ^[0-9]+$ ]] || die "BABYSIT_DELAY_S must be an integer (got: $BABYSIT_DELAY_S)"
   [[ -n "$REPO_DIR" ]] || die "REPO_DIR is required (env, env file, or --repo-dir)"
   [[ "$REPO_DIR" = /* ]] || REPO_DIR="$PWD/$REPO_DIR"
   [[ "$QUEUE_FILE" = /* ]] || QUEUE_FILE="$PWD/$QUEUE_FILE"
@@ -181,11 +184,18 @@ parse_args() {
 
 # ---------------------------------------------------------------- state
 is_done() { [[ -f "$DONE_FILE" ]] && grep -qxF "$1" "$DONE_FILE"; }
-# last line of the task in prs.txt: "PR PHASE SHA" (empty if none)
-recorded_pr() { [[ -f "$PRS_FILE" ]] && awk -F'\t' -v t="$1" '$1==t {l=$2" "$3" "$4} END {print l}' "$PRS_FILE" || true; }
-record_pr() { # record_pr <task> <pr> <phase> [sha]
-  printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "${4:-}" >>"$PRS_FILE"
-  log "state: $1 → PR #$2 phase=$3${4:+ sha=${4:0:8}}"
+# last line of the task in prs.txt: "PR PHASE SHA [ANNOTATIONS]" (empty if none). Lines written by
+# older versions have 4 columns; the 5th (e.g. "deferred=2") is optional.
+recorded_pr() { [[ -f "$PRS_FILE" ]] && awk -F'\t' -v t="$1" '$1==t {l=$2" "$3" "$4" "$5} END {print l}' "$PRS_FILE" || true; }
+record_pr() { # record_pr <task> <pr> <phase> [sha] [annotations]
+  printf '%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "${4:-}" "${5:-}" >>"$PRS_FILE"
+  log "state: $1 → PR #$2 phase=$3${4:+ sha=${4:0:8}}${5:+ $5}"
+}
+# save what an agent left uncommitted, for the human, before the runner dies (never cleans)
+save_leftover() { # save_leftover <file>
+  { echo "# git status --porcelain"; rgit status --porcelain; echo; echo "# git diff (unstaged)"; rgit diff
+    echo; echo "# git diff --cached"; rgit diff --cached
+    echo; echo "# untracked files"; rgit ls-files --others --exclude-standard; } >"$1" 2>&1 || true
 }
 
 # ---------------------------------------------------------------- queue
@@ -374,6 +384,10 @@ step_ci_gate() {
 step_babysit() {
   CUR_STEP="babysit"
   local out="$LOGS_DIR/$CUR_TASK-babysit.out" err="$LOGS_DIR/$CUR_TASK-babysit.err" rc=0 before after
+  if [[ "$BABYSIT_DELAY_S" -gt 0 ]]; then
+    log "BABYSIT_DELAY_S=$BABYSIT_DELAY_S: waiting before the babysit so late review comments land first"
+    sleep "$BABYSIT_DELAY_S"
+  fi
   before="$(pr_head_oid "$CUR_PR")"
   orca_comment "[$TASK_IDX/$TASK_TOTAL] $CUR_TASK: babysit on PR #$CUR_PR"
   log "babysit once (timeout ${BABYSIT_TIMEOUT_S}s) head=${before:0:8} → logs/$CUR_TASK-babysit.out"
@@ -388,22 +402,37 @@ step_babysit() {
   else
     log "babysit ended: exit 0 (output is not JSON; see logs/$CUR_TASK-babysit.out)"
   fi
+  # DEFERRED_FINDINGS=<n> marker (last occurrence anywhere in stdout, JSON or plain): review findings the
+  # babysit deferred to the author. Informational — it changes the handover message, never the flow.
+  DEFERRED_N="$(grep -oE 'DEFERRED_FINDINGS=[0-9]+' "$out" | tail -1 | cut -d= -f2 || true)"
+  DEFERRED_N="${DEFERRED_N:-0}"
+  if [[ "$DEFERRED_N" -gt 0 ]]; then
+    warn "babysit deferred $DEFERRED_N finding(s) to the author on PR #$CUR_PR — read the threads before merging"
+  else
+    log "babysit reported no deferred findings (DEFERRED_FINDINGS marker: $(grep -c 'DEFERRED_FINDINGS=' "$out" || true) occurrence(s))"
+  fi
 
-  # the babysit may have checked out the PR branch: require a clean tree and RETURN to the base branch
+  # the babysit may have checked out the PR branch: require a clean tree and RETURN to the base branch.
+  # Contract: it commits+pushes or reverts; a dirty tree is a violation. The runner NEVER cleans — it saves
+  # the leftover for the human and dies.
   local dirty
   dirty="$(rgit status --porcelain)"
-  [[ -z "$dirty" ]] || die "babysit left the working tree dirty (uncommitted); never cleaned automatically:"$'\n'"$dirty"
+  if [[ -n "$dirty" ]]; then
+    save_leftover "$LOGS_DIR/$CUR_TASK-babysit-leftover.diff"
+    orca_comment "FAILED at $CUR_TASK in step $CUR_STEP: babysit violated the clean-tree contract on PR #$CUR_PR (leftover saved in logs/$CUR_TASK-babysit-leftover.diff)"
+    die "babysit violated the clean-tree contract (uncommitted changes; never cleaned automatically). Leftover saved in logs/$CUR_TASK-babysit-leftover.diff. git status --porcelain:"$'\n'"$dirty"
+  fi
   rgit checkout -q "$BASE_BRANCH" || die "command failed: git -C $REPO_DIR checkout $BASE_BRANCH (after babysit)"
 
   # the babysit RAN (once): record BEFORE the re-gate so a rerun never repeats it
-  record_pr "$CUR_TASK" "$CUR_PR" babysat "$GATED_SHA"
+  record_pr "$CUR_TASK" "$CUR_PR" babysat "$GATED_SHA" "deferred=$DEFERRED_N"
   after="$(pr_head_oid "$CUR_PR")"
   if [[ "$after" != "$before" ]]; then
     log "push detected by babysit: head ${before:0:8} → ${after:0:8} — re-running the full CI gate"
     orca_comment "[$TASK_IDX/$TASK_TOTAL] $CUR_TASK: babysit pushed to PR #$CUR_PR, waiting for CI again"
     CUR_STEP="ci-gate-post-babysit"
     ci_gate "$CUR_PR"
-    record_pr "$CUR_TASK" "$CUR_PR" babysat "$GATED_SHA"
+    record_pr "$CUR_TASK" "$CUR_PR" babysat "$GATED_SHA" "deferred=$DEFERRED_N"
   else
     log "babysit made no push (head unchanged ${after:0:8})"
   fi
@@ -427,7 +456,7 @@ ensure_head_gated() {
     CUR_STEP="ci-gate-new-head"
     log "head ${head:0:8} ≠ gated sha ${GATED_SHA:0:8} — redoing only the CI gate"
     ci_gate "$CUR_PR"
-    record_pr "$CUR_TASK" "$CUR_PR" babysat "$GATED_SHA"
+    record_pr "$CUR_TASK" "$CUR_PR" babysat "$GATED_SHA" "deferred=$DEFERRED_N"
   fi
 }
 
@@ -437,7 +466,12 @@ step_wait_merge() {
   local pr="$CUR_PR" polls=0 fails=0 st started now mins errline
   started="$(date +%s)"
   orca_status in-review
-  orca_comment "[$TASK_IDX/$TASK_TOTAL] PR #$pr ($CUR_TASK) ready for your review/merge"
+  if [[ "$DEFERRED_N" -gt 0 ]]; then
+    orca_comment "[$TASK_IDX/$TASK_TOTAL] PR #$pr ($CUR_TASK): ready, with $DEFERRED_N deferred finding(s) awaiting your judgment"
+    warn "handover: PR #$pr ($CUR_TASK) ready, with $DEFERRED_N deferred finding(s) awaiting your judgment — read the review threads before merging"
+  else
+    orca_comment "[$TASK_IDX/$TASK_TOTAL] PR #$pr ($CUR_TASK) ready for your review/merge"
+  fi
   log "handover: PR #$pr waiting for MANUAL MERGE (poll ${POLL_INTERVAL}s, heartbeat every $HEARTBEAT_EVERY_POLLS polls)"
   while :; do
     # gh and sleep OUTSIDE the reach of set -e: a transient failure counts, it does not abort
@@ -504,7 +538,7 @@ dry_run_task() {
   rec="$(recorded_pr "$t")"
   if [[ "$SKIP_BABYSIT" == "1" ]]; then baby="SKIPPED (--skip-babysit) → phase babysat recorded without execution"
   elif [[ -z "$BABYSIT_COMMAND" ]]; then baby="SKIPPED (BABYSIT_COMMAND empty) → phase babysat recorded without execution"
-  else baby="BABYSIT_COMMAND in $REPO_DIR (once, PR_NUMBER=<PR>) > logs/$t-babysit.out; git checkout $BASE_BRANCH; if headRefOid moved → repeat 5"; fi
+  else baby="$( [[ "$BABYSIT_DELAY_S" -gt 0 ]] && echo "sleep $BABYSIT_DELAY_S; " )BABYSIT_COMMAND in $REPO_DIR (once, PR_NUMBER=<PR>) > logs/$t-babysit.out; DEFERRED_FINDINGS=<n> marker → annotation; clean tree required (leftover → logs/$t-babysit-leftover.diff); git checkout $BASE_BRANCH; if headRefOid moved → repeat 5"; fi
   cat <<EOF
 --- [$k/$n] $t
   prompt : $PROMPTS_DIR/$t.md ($(wc -c <"$PROMPTS_DIR/$t.md" | tr -d ' ') bytes)
@@ -517,7 +551,7 @@ dry_run_task() {
   5 ci   : check-runs of the head sha (API) + gh pr checks --watch --fail-fast; require: $(checks_describe) → phase gated
            orca comment "[$k/$n] $t: PR #<PR> opened, waiting for CI"
   6 baby : $baby → phase babysat
-  7 hand : orca status in-review · comment "[$k/$n] PR #<PR> ($t) ready for your review/merge"
+  7 hand : orca status in-review · comment "[$k/$n] PR #<PR> ($t) ready for your review/merge" (or "... ready, with <n> deferred finding(s) awaiting your judgment")
   8 wait : gh pr view <PR> --json state every ${POLL_INTERVAL}s; MERGED → continue; CLOSED → abort; heartbeat every $HEARTBEAT_EVERY_POLLS polls; gh failures: warn after ${POLL_FAILS_WARN} in a row, abort after ${POLL_FAILS_ABORT}
   9 done : mergeCommit ⊂ local $BASE_BRANCH (checkout+pull --ff-only) → phase merged · state/done.txt · orca status in-progress · comment "[$k/$n] PR #<PR> merged, moving on"
 EOF
@@ -525,7 +559,7 @@ EOF
 
 # ---------------------------------------------------------------- one task (phase machine)
 run_task() {
-  CUR_TASK="$1"; CUR_PR=""; GATED_SHA=""
+  CUR_TASK="$1"; CUR_PR=""; GATED_SHA=""; DEFERRED_N=0
   if [[ "$DRY_RUN" == "1" ]]; then dry_run_task; return 0; fi
   step_clean_base
   orca_status in-progress
@@ -533,6 +567,7 @@ run_task() {
   rec="$(recorded_pr "$CUR_TASK")"
   if [[ -n "$rec" ]]; then
     set -- $rec; CUR_PR="$1"; phase="${2:-opened}"; GATED_SHA="${3:-}"
+    case "${4:-}" in deferred=*) DEFERRED_N="${4#deferred=}"; [[ "$DEFERRED_N" =~ ^[0-9]+$ ]] || DEFERRED_N=0 ;; esac
     CUR_STEP="resume"
     st="$(rgh pr view "$CUR_PR" --json state --jq '.state' 2>/dev/null || echo "?")"
     case "$st" in
