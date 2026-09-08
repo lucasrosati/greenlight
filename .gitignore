@@ -3,3 +3,4 @@ prompts/
 state/
 logs/
 *.env
+local/
