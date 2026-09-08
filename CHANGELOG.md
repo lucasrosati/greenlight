@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Parity smoke passed against a scratch repo with real CI (two named checks) and a real
+  babysit command: PR detection by marker, gate by name, babysit push → re-gate on the new
+  sha, SIGTERM + resume without repeating the babysit, human push → gate-only redo, squash
+  merge validated by merge commit, PR closed without merge → abort with a decision request.
+  No code changes were needed.
+
 ## v0.1.0 — 2026-09-08
 
 Initial public release. Ported from a private, single-project runner into a generic tool.
