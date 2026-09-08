@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.2.0 — 2026-09-08
+
+Hardening from the first production queues. No changes to the sha-bound gate or the phase machine.
 
 - Babysit contract: `DEFERRED_FINDINGS=<n>` marker surfaced at handover (comment, warn log,
   `deferred=n` annotation on the `babysat` line; older 4-column lines still parse). Never
@@ -10,12 +12,14 @@
 - `BABYSIT_DELAY_S` (default 0): wait between the green gate and the babysit for late review bots.
 - `SYNC_COMMAND` exercised in the smoke harness: success, non-zero exit (points at
   `logs/env-sync.log`), and versioned-file dirt all behave as documented.
+- Example settings: the `.env.*` glob denies are replaced by an explicit list of secret files, so a
+  versioned `.env.example` stays editable. No new Bash allow entries: a review of 105 denials across
+  nine real sessions found only composition shapes, wrong prompt prescriptions and one-offs.
+- Runbook: gotchas for `pnpm` global flags before the subcommand, env-var prefixes, `${PIPESTATUS}`,
+  backticks in inline arguments, and writes into `.git/` or `/tmp`.
 - Docs: lessons from production runs and a design sketch for `stream-json` in-flight visibility.
-- Parity smoke passed against a scratch repo with real CI (two named checks) and a real
-  babysit command: PR detection by marker, gate by name, babysit push → re-gate on the new
-  sha, SIGTERM + resume without repeating the babysit, human push → gate-only redo, squash
-  merge validated by merge commit, PR closed without merge → abort with a decision request.
-  No code changes were needed.
+- Parity smoke (v0.1.0 binary) and final regression smoke (this binary) passed against a scratch repo
+  with real CI and a real babysit command.
 
 ## v0.1.0 — 2026-09-08
 
