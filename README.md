@@ -18,6 +18,57 @@ Current version: **v0.3.0** (`./greenlight.sh --version`) — history in [CHANGE
 Everything lives **outside** the target repo. The repo is only the target of operations
 (`REPO_DIR`); the runner never writes inside it.
 
+## Architecture
+
+```mermaid
+flowchart TD
+    CONFIG["queue.txt &nbsp;·&nbsp; prompts/&lt;TASK&gt;.md<br/>greenlight.env &nbsp;·&nbsp; claude-settings.json"]
+    STATE[("state/ — phases, crash-safe resume<br/>logs/ — session results, runner log")]
+    ORCA["Orca worktree card<br/>(optional, best-effort)"]
+    HUMAN["human"]
+
+    subgraph RUNNER["greenlight.sh — serial, one task at a time"]
+        A["1 · clean base<br/>checkout base · pull --ff-only · SYNC_COMMAND"]
+        B["2 · headless session<br/>claude -p under allow/deny settings"]
+        C["3 · detect the PR<br/>PR_NUMBER= marker, gh list fallback"]
+        D["4 · CI gate — bound to the head sha<br/>required checks by name or by count"]
+        E["5 · babysit — optional, at most once<br/>clean-tree contract · DEFERRED_FINDINGS=n"]
+        F["6 · handover — ready for review"]
+        G["7 · wait for MERGE<br/>validate the merge commit on the base branch"]
+        A --> B --> C
+        C -->|"phase: opened"| D
+        D -->|"phase: gated"| E
+        E -->|"phase: babysat"| F
+        F --> G
+        G -->|"phase: merged → next task"| A
+    end
+
+    subgraph TARGET["target repo (REPO_DIR)"]
+        WT["checkout — written only by the headless<br/>sessions, never by the runner itself"]
+    end
+
+    subgraph GITHUB["GitHub"]
+        PRN["pull request"]
+        CI["check-runs"]
+    end
+
+    CONFIG --> RUNNER
+    RUNNER -.-> STATE
+    RUNNER -.-> ORCA
+    B --> WT
+    WT -->|"branch + push"| PRN
+    D --> CI
+    E -->|"fix CI, apply review, push"| PRN
+    G -->|"poll state"| PRN
+    F -.->|"the ball is with you"| HUMAN
+    HUMAN -->|"reads the threads, merges —<br/>the runner never merges"| PRN
+```
+
+Two properties the diagram encodes: the runner and all of its files live **outside** `REPO_DIR`
+(only headless sessions write to the checkout), and the loop has exactly one exit per task — a
+**human** merging the PR. Phases land in `state/prs.txt` as they happen, which is what makes a
+crash or a `kill` resumable.
+
 ## Requirements
 
 `bash` 3.2+ (macOS default works), `git`, `gh` >= 2.30 (authenticated), `jq` >= 1.6, `perl`,
