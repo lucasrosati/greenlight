@@ -1,6 +1,12 @@
 queue.txt
-prompts/
-state/
-logs/
+prompts/*
+!prompts/.gitkeep
+state/*
+!state/.gitkeep
+logs/*
+!logs/.gitkeep
 *.env
+*.env.*
+*.bak
+*.bak-*
 local/

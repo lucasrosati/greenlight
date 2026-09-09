@@ -3,12 +3,12 @@
 # Sourceable. Never fails: no binary = no-op with 1 warn; CLI error = silenced.
 # Contract: orca_comment "short text" · orca_status todo|in-progress|in-review|completed
 # In dry-run (QUEUE_DRY_RUN=1) it only prints what it would emit.
-# Set ORCA_ENABLED=0 to disable reporting entirely (no warn).
+# Off by default: set ORCA_ENABLED=1 to enable reporting (requires the orca CLI).
 
 if [[ -n "${_ORCA_LIB_LOADED:-}" ]]; then return 0 2>/dev/null || true; fi
 _ORCA_LIB_LOADED=1
 
-ORCA_ENABLED="${ORCA_ENABLED:-1}"
+ORCA_ENABLED="${ORCA_ENABLED:-0}"
 ORCA_BIN=""
 [[ "$ORCA_ENABLED" == "1" ]] && ORCA_BIN="$(command -v orca 2>/dev/null || true)"
 
@@ -26,6 +26,7 @@ if [[ "$ORCA_ENABLED" == "1" && -z "$ORCA_BIN" ]]; then
 fi
 
 _orca_set() { # _orca_set <flag> <value>
+  [[ "$ORCA_ENABLED" == "1" ]] || return 0   # disabled: silent no-op, in dry-run too
   local sel; sel="$(_orca_selector)"
   if [[ "${QUEUE_DRY_RUN:-0}" == "1" ]]; then
     printf '[dry-run] orca worktree set --worktree %s %s "%s"\n' "$sel" "$1" "$2"

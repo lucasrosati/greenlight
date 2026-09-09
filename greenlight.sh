@@ -8,7 +8,7 @@
 #
 # Usage: greenlight.sh [queue.txt] [--dry-run] [--env <file>] [--repo-dir <path>]
 #                      [--poll-interval 60] [--task-timeout 3600] [--babysit-timeout 1800]
-#                      [--skip-babysit]
+#                      [--skip-babysit] [--version]
 #
 # Invariants: never auto-merge · never commit on the base branch · 1 task = 1 headless session ·
 # serial on the main checkout · fail-fast with state in state/ · zero secrets in logs/comments ·
@@ -56,6 +56,7 @@ source "$GREENLIGHT_DIR/lib/orca.sh"
 source "$GREENLIGHT_DIR/lib/checks.sh"
 
 # ---------------------------------------------------------------- configuration
+GREENLIGHT_VERSION="0.3.0"
 # Every setting is an env var. Paths default relative to the greenlight directory.
 REPO_DIR="${REPO_DIR:-}"                                   # target checkout (required)
 BASE_BRANCH="${BASE_BRANCH:-main}"
@@ -63,6 +64,7 @@ QUEUE_FILE="${QUEUE_FILE:-$GREENLIGHT_DIR/queue.txt}"
 PROMPTS_DIR="${PROMPTS_DIR:-$GREENLIGHT_DIR/prompts}"
 STATE_DIR="${STATE_DIR:-$GREENLIGHT_DIR/state}"
 LOGS_DIR="${LOGS_DIR:-$GREENLIGHT_DIR/logs}"
+SETTINGS_FILE_EXPLICIT="${SETTINGS_FILE:+1}"   # set by the user (shell or env file) vs defaulted below
 SETTINGS_FILE="${SETTINGS_FILE:-$GREENLIGHT_DIR/claude-settings.json}"
 SETTINGS_EXAMPLE="$GREENLIGHT_DIR/examples/claude-settings.example.json"
 DONE_FILE="$STATE_DIR/done.txt"
@@ -165,6 +167,7 @@ parse_args() {
       --repo-dir) shift; REPO_DIR="${1:?--repo-dir needs a value}" ;;
       --repo-dir=*) REPO_DIR="${1#*=}" ;;
       -h|--help) usage 0 ;;
+      --version) echo "greenlight $GREENLIGHT_VERSION"; FINISHED=1; exit 0 ;;
       --*) die "unknown argument: $1" ;;
       *) QUEUE_FILE="$1" ;;
     esac
@@ -177,7 +180,12 @@ parse_args() {
   [[ -n "$REPO_DIR" ]] || die "REPO_DIR is required (env, env file, or --repo-dir)"
   [[ "$REPO_DIR" = /* ]] || REPO_DIR="$PWD/$REPO_DIR"
   [[ "$QUEUE_FILE" = /* ]] || QUEUE_FILE="$PWD/$QUEUE_FILE"
-  [[ -f "$SETTINGS_FILE" ]] || SETTINGS_FILE="$SETTINGS_EXAMPLE"
+  if [[ ! -f "$SETTINGS_FILE" ]]; then
+    # Only the implicit default may fall back to the example. An explicitly set path that is
+    # missing is a typo — headless sessions must not run under permissions the user never chose.
+    [[ -z "$SETTINGS_FILE_EXPLICIT" ]] || die "SETTINGS_FILE not found: $SETTINGS_FILE (explicitly set; refusing to fall back to the example settings)"
+    SETTINGS_FILE="$SETTINGS_EXAMPLE"
+  fi
   export QUEUE_DRY_RUN="$DRY_RUN"
   export REPO_DIR GREENLIGHT_DIR SETTINGS_FILE BASE_BRANCH
 }
@@ -219,6 +227,7 @@ read_queue() { # fills PENDING[] with valid, not-yet-done, de-duplicated task-id
 # ---------------------------------------------------------------- preflight (once, at boot)
 preflight() {
   CUR_STEP="preflight"
+  mkdir -p "$STATE_DIR" "$LOGS_DIR"   # before anything logs: log() appends to $RUNNER_LOG outside dry-run
   local missing=() t
   [[ -d "$REPO_DIR/.git" ]] || die "REPO_DIR is not a git repository: $REPO_DIR"
   [[ "$(rgit rev-parse --is-inside-work-tree 2>/dev/null)" == "true" ]] || die "REPO_DIR has no working tree: $REPO_DIR"
@@ -245,7 +254,6 @@ preflight() {
   else
     "$GH_BIN" auth status >/dev/null 2>&1 || die "gh not authenticated (command: gh auth status)"
   fi
-  mkdir -p "$STATE_DIR" "$LOGS_DIR"
   [[ "$DRY_RUN" == "1" ]] || echo $$ >"$STATE_DIR/runner.pid"   # stop: kill -TERM $(cat state/runner.pid)
   log "preflight ok — repo=$REPO_DIR base=$BASE_BRANCH queue=$QUEUE_FILE pending=$TASK_TOTAL poll=${POLL_INTERVAL}s timeout=${TASK_TIMEOUT_S}s checks=$CHECKS_MODE babysit=$( [[ -n "$BABYSIT_COMMAND" && "$SKIP_BABYSIT" != "1" ]] && echo on || echo off )"
 }
@@ -313,8 +321,9 @@ step_detect_pr() {
     # b) fallback: open PR by me, head contains the task-id (lowercase) AND created after the task started
     lower="$(tr '[:upper:]' '[:lower:]' <<<"$CUR_TASK")"
     local cands
+    # gh's --jq accepts no --arg flags; pipe the JSON into real jq instead
     cands="$(rgh pr list --author '@me' --state open --limit 50 --json number,headRefName,createdAt \
-      --jq --arg t "$lower" --arg s "$TASK_START_TS" '[.[] | select((.headRefName|ascii_downcase|contains($t)) and .createdAt > $s)] | map(.number) | join(" ")')"
+      | jq -r --arg t "$lower" --arg s "$TASK_START_TS" '[.[] | select((.headRefName|ascii_downcase|contains($t)) and .createdAt > $s)] | map(.number) | join(" ")')"
     case "$(wc -w <<<"$cands" | tr -d ' ')" in
       1) pr="$(tr -d ' ' <<<"$cands")"; log "PR detected by fallback (gh pr list): #$pr" ;;
       0) die "no PR detected: no PR_NUMBER= marker in the result and no open PR with head containing '$lower' created after $TASK_START_TS" ;;

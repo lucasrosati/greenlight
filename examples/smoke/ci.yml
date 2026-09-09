@@ -1,0 +1,16 @@
+# CI workflow for the throwaway smoke repo (docs/testing.md).
+# Two trivially green jobs whose NAMES the gate requires: REQUIRED_CHECKS="lint,test".
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "lint ok"
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "test ok"

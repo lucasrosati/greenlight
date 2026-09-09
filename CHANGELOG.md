@@ -1,5 +1,32 @@
 # Changelog
 
+## v0.3.0 — 2026-09-09
+
+Public-launch hardening: everything found by a fresh-clone audit. No changes to the sha-bound
+gate or the phase machine.
+
+- **Fixed:** first non-dry run on a fresh clone died in preflight — `log()` wrote to
+  `logs/runner.log` before `mkdir -p` ran. The mkdir now opens preflight, and `logs/`, `state/`
+  and `prompts/` ship with `.gitkeep`.
+- **Fixed:** the PR-detection fallback (`gh pr list`) used `--jq` with `--arg`, a flag `gh`
+  does not have; any task whose prompt failed to print `PR_NUMBER=` aborted with a gh usage
+  dump instead of the documented candidate search. The JSON now pipes into real `jq`.
+- **Changed:** Orca reporting is now **opt-in** (`ORCA_ENABLED=1`); non-Orca users no longer
+  get a warn on every invocation.
+- **Changed:** an explicitly set `SETTINGS_FILE` that does not exist is now a fatal error
+  instead of a silent fallback to the example permissions. The unset default still falls back.
+- `--version` flag and `GREENLIGHT_VERSION` constant.
+- `.gitignore` hardened (`*.env.*`, `*.bak*`) so env-file backups cannot be committed.
+- `examples/queue.example.txt` now runs out of the box with the single prompt the README
+  creates (extra tasks are commented out).
+- CI on this repo: `bash -n` + `shellcheck` on every PR.
+- **Docs:** `docs/testing.md` — the regression smoke harness is now public
+  (`examples/smoke/`: scratch-repo workflow, SMOKE prompts, stub babysit, stub sync cases,
+  flaky-gh wrapper). Earlier changelog entries that mention "the smoke harness" referred to
+  the author's private copy of exactly these files.
+- README: version line, tool version floors, dry-run prerequisites, macOS `caffeinate` note,
+  `ORCA_ENABLED` row, LICENSE link.
+
 ## v0.2.0 — 2026-09-08
 
 Hardening from the first production queues. No changes to the sha-bound gate or the phase machine.

@@ -65,7 +65,7 @@ checks_load() { # resolve REQUIRED_CHECK_NAMES[] according to CHECKS_MODE (runti
 checks_describe() { # one-line summary for dry-run output
   case "$CHECKS_MODE" in
     count) echo ">= $MIN_CHECKS successful check-runs (CHECKS_MODE=count, with warn + comment)" ;;
-    *) echo "${#REQUIRED_CHECK_NAMES[@]} named checks success ($(IFS='|'; echo "${REQUIRED_CHECK_NAMES[*]}"))" ;;
+    *) echo "${#REQUIRED_CHECK_NAMES[@]} named checks success ($(IFS='|'; echo "${REQUIRED_CHECK_NAMES[*]+${REQUIRED_CHECK_NAMES[*]}}"))" ;;   # bash 3.2 + set -u: guard the empty array
   esac
 }
 

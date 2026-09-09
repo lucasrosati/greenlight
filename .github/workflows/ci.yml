@@ -1,0 +1,14 @@
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: bash -n
+        run: bash -n greenlight.sh lib/checks.sh lib/orca.sh examples/smoke/*.sh
+      - name: shellcheck (errors only)
+        run: shellcheck -S error greenlight.sh lib/checks.sh lib/orca.sh examples/smoke/*.sh

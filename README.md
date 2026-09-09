@@ -13,13 +13,17 @@ One task = one fresh headless session, run serially on a single checkout, so eve
 from the base branch **with** the previous task merged. State lives in `state/`, so a crash or a
 `kill` resumes exactly where it stopped without re-running finished work.
 
+Current version: **v0.3.0** (`./greenlight.sh --version`) — history in [CHANGELOG.md](CHANGELOG.md).
+
 Everything lives **outside** the target repo. The repo is only the target of operations
 (`REPO_DIR`); the runner never writes inside it.
 
 ## Requirements
 
-`bash` 3.2+ (macOS default works), `git`, `gh` (authenticated), `jq`, `perl`, `claude`
-(Claude Code CLI). Optional: `orca` CLI for progress reporting on an Orca ADE worktree card.
+`bash` 3.2+ (macOS default works), `git`, `gh` >= 2.30 (authenticated), `jq` >= 1.6, `perl`,
+`claude` (Claude Code CLI). Optional: the `orca` CLI for progress reporting on an Orca ADE
+worktree card — reporting is **off by default**; set `ORCA_ENABLED=1` to turn it on. Not an
+Orca user? There is nothing to configure.
 
 ## Quick start
 
@@ -30,10 +34,14 @@ cp examples/greenlight.env.example greenlight.env     # set REPO_DIR at minimum
 cp examples/queue.example.txt queue.txt
 mkdir -p prompts && $EDITOR prompts/TASK-101.md        # see docs/prompt-contract.md
 
-./greenlight.sh queue.txt --dry-run     # prints the plan; no claude, no gh writes
+./greenlight.sh queue.txt --dry-run     # prints the plan; no claude session, no gh writes
 ./greenlight.sh queue.txt               # runs
 nohup ./greenlight.sh queue.txt > logs/run-$(date +%F).out 2>&1 &   # in the background
 ```
+
+`--dry-run` is not dependency-free: it still needs `claude` and `gh` on PATH and a clean
+`REPO_DIR` checkout — only `gh auth status` and the writes are skipped. On macOS, prefix the
+background run with `caffeinate -is` so a sleeping laptop does not pause the merge polling.
 
 Stop a running queue with `kill -TERM $(cat state/runner.pid)`. Resume by running the same
 command again. See [docs/runbook.md](docs/runbook.md).
@@ -64,6 +72,7 @@ default and a full worked example.
 | `TASK_TIMEOUT_S` / `--task-timeout` | 3600 s | ceiling per task session |
 | `BABYSIT_TIMEOUT_S` / `--babysit-timeout` | 1800 s | ceiling for the babysit command |
 | `--skip-babysit` / `SKIP_BABYSIT=1` | off | skip the babysit even when configured |
+| `ORCA_ENABLED` | `0` | `1` reports progress to an Orca ADE worktree card |
 
 ## The CI gate
 
@@ -120,15 +129,17 @@ before opening an issue or PR that adds merging.
 ## Contributing
 
 Issues and PRs are welcome for bugs, portability (bash 3.2 stays a requirement), new
-`CHECKS_MODE` sources and doc fixes. Run `bash -n` on every script and a `--dry-run` against a
-scratch repo before sending; a smoke harness for full runs is on the roadmap.
+`CHECKS_MODE` sources and doc fixes. CI runs `bash -n` and `shellcheck` on every PR. For any
+change to the runner itself, run the full regression smoke: [docs/testing.md](docs/testing.md)
+ships the harness (scratch-repo workflow, smoke prompts, stubs).
 
 ## Docs
 
 - [docs/runbook.md](docs/runbook.md) — stop, resume, phase table, failure modes, state cleanup, shell gotchas.
 - [docs/prompt-contract.md](docs/prompt-contract.md) — what a task prompt must do for the runner to pick up its PR.
 - [docs/design.md](docs/design.md) — invariants, phase machine, why the gate is sha-bound, squash-merge validation.
+- [docs/testing.md](docs/testing.md) — the regression smoke harness: scratch repo, prompts, stubs, run matrix.
 
 ## License
 
-MIT.
+MIT — see [LICENSE](LICENSE).
