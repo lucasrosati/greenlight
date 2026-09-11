@@ -547,7 +547,7 @@ dry_run_task() {
   rec="$(recorded_pr "$t")"
   if [[ "$SKIP_BABYSIT" == "1" ]]; then baby="SKIPPED (--skip-babysit) → phase babysat recorded without execution"
   elif [[ -z "$BABYSIT_COMMAND" ]]; then baby="SKIPPED (BABYSIT_COMMAND empty) → phase babysat recorded without execution"
-  else baby="$( [[ "$BABYSIT_DELAY_S" -gt 0 ]] && echo "sleep $BABYSIT_DELAY_S; " )BABYSIT_COMMAND in $REPO_DIR (once, PR_NUMBER=<PR>) > logs/$t-babysit.out; DEFERRED_FINDINGS=<n> marker → annotation; clean tree required (leftover → logs/$t-babysit-leftover.diff); git checkout $BASE_BRANCH; if headRefOid moved → repeat 5"; fi
+  else baby="$( [[ "$BABYSIT_DELAY_S" -gt 0 ]] && echo "sleep $BABYSIT_DELAY_S; " || true )BABYSIT_COMMAND in $REPO_DIR (once, PR_NUMBER=<PR>) > logs/$t-babysit.out; DEFERRED_FINDINGS=<n> marker → annotation; clean tree required (leftover → logs/$t-babysit-leftover.diff); git checkout $BASE_BRANCH; if headRefOid moved → repeat 5"; fi
   cat <<EOF
 --- [$k/$n] $t
   prompt : $PROMPTS_DIR/$t.md ($(wc -c <"$PROMPTS_DIR/$t.md" | tr -d ' ') bytes)
