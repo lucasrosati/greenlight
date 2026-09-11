@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+Runner robustness after a production crash (#1): the runner died by a hard signal inside the
+babysit sleep, left `state/runner.pid` behind and nothing in the log said so.
+
+- **Added:** preflight pidfile check. A pidfile whose PID is alive aborts the launch (`another
+  runner is alive (pid N) — stop it with: kill -TERM N`) instead of running two queues on the
+  same `REPO_DIR`; a pidfile whose PID is gone is logged as `stale runner.pid …` with the last
+  heartbeat, removed, and the run resumes from `state/prs.txt`. Skipped in `--dry-run`.
+- **Added:** `state/heartbeat` — every log line also records its time and `task/step`, so a
+  death the exit trap cannot see (SIGKILL, OOM, reboot) still leaves "last seen alive at … in …".
+- **Fixed:** the exit trap removed `state/runner.pid` unconditionally; it now removes only the
+  pidfile this process wrote (a refused second launch no longer deletes the live runner's).
+- **Fixed:** `--dry-run` with `BABYSIT_DELAY_S=0` tripped `set -e` in the plan printer.
+- **Docs:** launch recipe is `nohup caffeinate -is ./greenlight.sh … &` + `disown` — the README
+  had the order inverted, which lets the terminal's SIGHUP kill `caffeinate` while the runner
+  lives on; runbook gains the launch section, the hard-signal symptom in "died in the middle",
+  and two smoke cases (stale pidfile, runner alive).
+
 ## v0.3.0 — 2026-09-09
 
 Public-launch hardening: everything found by a fresh-clone audit. No changes to the sha-bound

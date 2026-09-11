@@ -87,15 +87,27 @@ mkdir -p prompts && $EDITOR prompts/TASK-101.md        # see docs/prompt-contrac
 
 ./greenlight.sh queue.txt --dry-run     # prints the plan; no claude session, no gh writes
 ./greenlight.sh queue.txt               # runs
-nohup ./greenlight.sh queue.txt > logs/run-$(date +%F).out 2>&1 &   # in the background
+
+# in the background — survives the terminal closing AND keeps the machine awake (macOS)
+nohup caffeinate -is ./greenlight.sh queue.txt > logs/run-$(date +%F).out 2>&1 &
+disown   # zsh: also detach the job from this shell
+
+# stop
+kill -TERM $(cat state/runner.pid)
 ```
 
 `--dry-run` is not dependency-free: it still needs `claude` and `gh` on PATH and a clean
-`REPO_DIR` checkout — only `gh auth status` and the writes are skipped. On macOS, prefix the
-background run with `caffeinate -is` so a sleeping laptop does not pause the merge polling.
+`REPO_DIR` checkout — only `gh auth status` and the writes are skipped.
 
-Stop a running queue with `kill -TERM $(cat state/runner.pid)`. Resume by running the same
-command again. See [docs/runbook.md](docs/runbook.md).
+The order `nohup caffeinate …` matters: `nohup` protects only its direct child, so with
+`caffeinate -is nohup …` the caffeinate dies on the terminal's SIGHUP and the runner keeps going
+with a laptop that is free to sleep. Without `caffeinate` (Linux, or a machine that never
+sleeps) plain `nohup ./greenlight.sh …` is fine.
+
+Resume by running the same command again: `state/prs.txt` records each task's phase, so a
+finished gate or babysit is never repeated. That also covers a crash (pidfile left behind, no
+`FAILED at` line in the log): the preflight reports the stale pidfile and resumes. Relaunch
+with `>>` instead of `>` to keep the previous log. See [docs/runbook.md](docs/runbook.md).
 
 The runner works from any cwd: paths default relative to the directory that holds
 `greenlight.sh`, and a relative `REPO_DIR` or queue path is resolved against the caller's cwd.

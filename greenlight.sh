@@ -99,6 +99,7 @@ GATED_SHA=""
 DEFERRED_N=0     # DEFERRED_FINDINGS=<n> reported by the babysit (0 = none/not reported)
 TASK_START_TS=""
 INTERRUPTED=0
+PIDFILE_OWNED=0   # set once preflight writes state/runner.pid; the trap never removes another runner's pidfile
 FINISHED=0   # bash 3.2: a `set -u` error exits with status 0 inside the trap — this flag closes that hole
 TASK_IDX=0
 TASK_TOTAL=0
@@ -110,7 +111,13 @@ ts() { date '+%Y-%m-%d %H:%M:%S'; }
 log() {
   local line="[$(ts)] [$CUR_TASK/$CUR_STEP] $*"
   echo "$line"
-  [[ "$DRY_RUN" == "1" ]] || echo "$line" >>"$RUNNER_LOG"
+  [[ "$DRY_RUN" == "1" ]] && return 0
+  echo "$line" >>"$RUNNER_LOG"
+  # last-alive trace: a hard signal (SIGKILL/OOM/reboot) skips the exit trap, so this file is the
+  # only record of where the runner was; the next preflight reports it when it finds a stale pidfile.
+  # Only the runner that owns the pidfile writes it (a refused second launch must not clobber it).
+  [[ "$PIDFILE_OWNED" == "1" ]] && echo "$(date -u +%FT%TZ) $CUR_TASK/$CUR_STEP" >"$STATE_DIR/heartbeat"
+  return 0
 }
 warn() { log "WARN: $*" >&2; }
 die() { # die <message> — always names task, step and (when there is one) the command
@@ -127,7 +134,7 @@ rgh()  { (cd "$REPO_DIR" && "$GH_BIN" "$@"); }
 on_exit() {
   local rc=$?
   trap - EXIT ERR INT TERM
-  [[ "${DRY_RUN:-0}" == "1" ]] || rm -f "$STATE_DIR/runner.pid"
+  [[ "${PIDFILE_OWNED:-0}" == "1" ]] && rm -f "$STATE_DIR/runner.pid"
   if [[ $rc -eq 0 && "$FINISHED" != "1" ]]; then rc=1; fi   # exited without reaching the end = failure
   if [[ "$INTERRUPTED" == "1" ]]; then exit "$rc"; fi          # on_signal already reported
   if [[ $rc -ne 0 ]]; then
@@ -225,10 +232,27 @@ read_queue() { # fills PENDING[] with valid, not-yet-done, de-duplicated task-id
 }
 
 # ---------------------------------------------------------------- preflight (once, at boot)
+# Stale or concurrent runner. The pidfile is removed by the exit trap, so one left behind means
+# either a runner is still alive (two queues on the same REPO_DIR would checkout under each other's
+# session — refuse) or the previous run died without its trap (SIGKILL, OOM, reboot — report where it
+# was, using the heartbeat, and resume from state/prs.txt). Liveness = kill -0 (process exists), not ps.
+pidfile_check() {
+  [[ "$DRY_RUN" != "1" && -f "$STATE_DIR/runner.pid" ]] || return 0
+  local old_pid last=""
+  old_pid="$(tr -d '[:space:]' <"$STATE_DIR/runner.pid" 2>/dev/null || true)"
+  if [[ -n "$old_pid" ]] && kill -0 "$old_pid" 2>/dev/null; then
+    die "another runner is alive (pid $old_pid, state/runner.pid) — stop it with: kill -TERM $old_pid"
+  fi
+  [[ -f "$STATE_DIR/heartbeat" ]] && last="$(head -1 "$STATE_DIR/heartbeat" 2>/dev/null || true)"
+  log "stale runner.pid (pid ${old_pid:-?} is not running): the previous run ended without its exit trap (hard signal, OOM or reboot)${last:+ — last seen alive at ${last%% *} in ${last#* }}; state/prs.txt is authoritative — resuming from it"
+  rm -f "$STATE_DIR/runner.pid"
+}
+
 preflight() {
   CUR_STEP="preflight"
   mkdir -p "$STATE_DIR" "$LOGS_DIR"   # before anything logs: log() appends to $RUNNER_LOG outside dry-run
   local missing=() t
+  pidfile_check
   [[ -d "$REPO_DIR/.git" ]] || die "REPO_DIR is not a git repository: $REPO_DIR"
   [[ "$(rgit rev-parse --is-inside-work-tree 2>/dev/null)" == "true" ]] || die "REPO_DIR has no working tree: $REPO_DIR"
   [[ -f "$SETTINGS_FILE" ]] || die "headless settings file missing: $SETTINGS_FILE"
@@ -254,7 +278,7 @@ preflight() {
   else
     "$GH_BIN" auth status >/dev/null 2>&1 || die "gh not authenticated (command: gh auth status)"
   fi
-  [[ "$DRY_RUN" == "1" ]] || echo $$ >"$STATE_DIR/runner.pid"   # stop: kill -TERM $(cat state/runner.pid)
+  if [[ "$DRY_RUN" != "1" ]]; then echo $$ >"$STATE_DIR/runner.pid"; PIDFILE_OWNED=1; fi   # stop: kill -TERM $(cat state/runner.pid); pidfile_check ran first
   log "preflight ok — repo=$REPO_DIR base=$BASE_BRANCH queue=$QUEUE_FILE pending=$TASK_TOTAL poll=${POLL_INTERVAL}s timeout=${TASK_TIMEOUT_S}s checks=$CHECKS_MODE babysit=$( [[ -n "$BABYSIT_COMMAND" && "$SKIP_BABYSIT" != "1" ]] && echo on || echo off )"
 }
 
@@ -547,7 +571,7 @@ dry_run_task() {
   rec="$(recorded_pr "$t")"
   if [[ "$SKIP_BABYSIT" == "1" ]]; then baby="SKIPPED (--skip-babysit) → phase babysat recorded without execution"
   elif [[ -z "$BABYSIT_COMMAND" ]]; then baby="SKIPPED (BABYSIT_COMMAND empty) → phase babysat recorded without execution"
-  else baby="$( [[ "$BABYSIT_DELAY_S" -gt 0 ]] && echo "sleep $BABYSIT_DELAY_S; " )BABYSIT_COMMAND in $REPO_DIR (once, PR_NUMBER=<PR>) > logs/$t-babysit.out; DEFERRED_FINDINGS=<n> marker → annotation; clean tree required (leftover → logs/$t-babysit-leftover.diff); git checkout $BASE_BRANCH; if headRefOid moved → repeat 5"; fi
+  else baby="$( [[ "$BABYSIT_DELAY_S" -gt 0 ]] && echo "sleep $BABYSIT_DELAY_S; " || true )BABYSIT_COMMAND in $REPO_DIR (once, PR_NUMBER=<PR>) > logs/$t-babysit.out; DEFERRED_FINDINGS=<n> marker → annotation; clean tree required (leftover → logs/$t-babysit-leftover.diff); git checkout $BASE_BRANCH; if headRefOid moved → repeat 5"; fi
   cat <<EOF
 --- [$k/$n] $t
   prompt : $PROMPTS_DIR/$t.md ($(wc -c <"$PROMPTS_DIR/$t.md" | tr -d ' ') bytes)
