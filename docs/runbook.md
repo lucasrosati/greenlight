@@ -13,7 +13,8 @@ greenlight/
 ├── prompts/<TASK>.md          # one prompt per task (gitignored)
 ├── state/done.txt             # finished task-ids (1 per line)
 ├── state/prs.txt              # TASK<TAB>PR<TAB>PHASE<TAB>GATED_SHA[<TAB>deferred=n] (append-only; last line wins)
-├── state/runner.pid           # only while running
+├── state/runner.pid           # only while running (a leftover one = the previous run died by a hard signal)
+├── state/heartbeat            # last log line's time + task/step; read by the preflight when the pidfile is stale
 └── logs/                      # runner.log · <TASK>.json/.err · <TASK>-babysit.out · <TASK>-checks.log
 ```
 
@@ -29,9 +30,32 @@ non-interactive shell starts with SIGINT ignored, and bash does not trap a signa
 on entry. The pidfile is removed on exit; if it does not exist, the runner is not running. A
 headless session in progress dies with the runner.
 
+## Launching (and why the command order matters)
+
+```bash
+nohup caffeinate -is ./greenlight.sh queue.txt --env my.env >> logs/run-$(date +%F).out 2>&1 &
+disown   # zsh: detach the job so closing the shell never touches it
+```
+
+`nohup` shields only its direct child from the terminal's SIGHUP. `caffeinate -is nohup …`
+(the other order) leaves `caffeinate` exposed: closing the terminal kills it, the runner survives
+but the laptop is free to sleep — and a runner asleep in `sleep "$BABYSIT_DELAY_S"` or in the
+merge poll is exactly the one that gets killed later. `>>` keeps one log across relaunches.
+
+A second launch while a runner is alive is refused in preflight (`another runner is alive (pid N)
+— stop it with: kill -TERM N`): two queues on the same `REPO_DIR` would `checkout` under each
+other's session. The refused launch leaves the live runner's pidfile and heartbeat untouched.
+
 ## "The runner died in the middle of task X. Now what?"
 
 1. `tail -5 logs/runner.log` — the last `FAILED at X in step <STEP>` line says where it stopped.
+   **No `FAILED at` line, process gone, `state/runner.pid` still there** = a hard signal
+   (SIGKILL, OOM, reboot): the exit trap never ran. `state/heartbeat` holds the last log's time
+   and task/step. Nothing to clean by hand — the next launch logs `stale runner.pid (pid N is
+   not running) … last seen alive at <time> in <task/step>`, removes it and resumes from
+   `state/prs.txt`. Measured case (2026-09-10): the runner died inside `sleep
+   "$BABYSIT_DELAY_S"` with the PR at `gated`; the relaunch ran the babysit, and since the head
+   had moved, redid only the gate (`ci-gate-new-head`) before the handover — expected behavior.
 2. `grep '^X' state/prs.txt | tail -1` — the recorded **phase** of X's PR:
 
 | phase in `prs.txt` | what already happened | rerun does | human action before rerun |
@@ -53,9 +77,11 @@ stash/clean), a diverged `pull --ff-only`.
 
 ## Preflight (once at boot, fails early)
 
-`REPO_DIR` is a git repo with a working tree · settings file is valid JSON · `git gh jq perl
-claude` on PATH · **a prompt exists for every pending task** (names the missing ones) · clean
-working tree (untracked included) · required checks resolved per `CHECKS_MODE` · `gh auth status`.
+`state/runner.pid` absent, stale (logged + removed) or **alive (abort)** · `REPO_DIR` is a git
+repo with a working tree · settings file is valid JSON · `git gh jq perl claude` on PATH · **a
+prompt exists for every pending task** (names the missing ones) · clean working tree (untracked
+included) · required checks resolved per `CHECKS_MODE` · `gh auth status`. Liveness is
+`kill -0 <pid>` (the process exists), not a `ps` name match. `--dry-run` skips the pidfile check.
 
 ## The loop per task
 
@@ -202,3 +228,9 @@ Checklist (any deviation is a finding):
 7. Rerun: SMOKE skipped by `done.txt`; SMOKE2 `CLOSED` aborts asking for a decision; `gh pr list` = 0 open.
 8. (optional) `GH_BIN=<wrapper that fails on demand>`: 4 failures → warn at the 3rd, recovery; 5 → abort.
 9. `git -C <smoke-repo> branch --show-current` = base branch, clean tree, `runner.pid` removed.
+10. Stale pidfile: `echo 999999 > state/runner.pid`, launch → first preflight line is
+    `stale runner.pid (pid 999999 is not running) … last seen alive at … in …`, the run goes on
+    normally. (An empty queue — every task in `done.txt` — is enough: the check is in preflight.)
+11. Runner alive: launch twice → the second dies in preflight with `another runner is alive
+    (pid N, state/runner.pid) — stop it with: kill -TERM N`, exit 1; `state/runner.pid` still
+    holds N and `state/heartbeat` is unchanged (the refused launch owns neither).
