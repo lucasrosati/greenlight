@@ -199,6 +199,14 @@ Issues and PRs are welcome for bugs, portability (bash 3.2 stays a requirement),
 change to the runner itself, run the full regression smoke: [docs/testing.md](docs/testing.md)
 ships the harness (scratch-repo workflow, smoke prompts, stubs).
 
+## Releases
+
+`scripts/release.sh X.Y.Z` bumps `GREENLIGHT_VERSION`, turns the CHANGELOG's `## Unreleased`
+into `## vX.Y.Z — <date>`, commits and tags (`--preview` only prints the notes that would ship).
+`git push --follow-tags` then triggers `.github/workflows/release.yml`, which refuses a tag that
+does not match `GREENLIGHT_VERSION` and publishes the GitHub Release with that CHANGELOG section
+as notes. Deciding to release stays a human command; only the publishing is automated.
+
 ## Docs
 
 - [docs/runbook.md](docs/runbook.md) — stop, resume, phase table, failure modes, state cleanup, shell gotchas.

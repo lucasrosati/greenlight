@@ -9,8 +9,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: bash -n
-        run: bash -n greenlight.sh lib/checks.sh lib/orca.sh examples/smoke/*.sh
+        run: bash -n greenlight.sh lib/checks.sh lib/orca.sh examples/smoke/*.sh scripts/*.sh
       - name: shellcheck (errors only)
-        run: shellcheck -S error greenlight.sh lib/checks.sh lib/orca.sh examples/smoke/*.sh
+        run: shellcheck -S error greenlight.sh lib/checks.sh lib/orca.sh examples/smoke/*.sh scripts/*.sh
       - name: lib/checks.sh unit (stubbed GitHub calls)
         run: bash examples/smoke/checks-unit.sh
+      - name: release notes extractable for the current version
+        run: scripts/release-notes.sh "v$(sed -n 's/^GREENLIGHT_VERSION="\(.*\)"$/\1/p' greenlight.sh)" >/dev/null
