@@ -1,0 +1,25 @@
+name: release
+# Pushing a tag vX.Y.Z publishes a GitHub Release whose notes are the CHANGELOG.md section of
+# that version. Cut the tag with scripts/release.sh (bumps GREENLIGHT_VERSION, dates the
+# CHANGELOG entry, commits, tags); then `git push --follow-tags`. Nothing here decides *when*
+# to release — that stays a human command, like the merge in the runner.
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: tag matches GREENLIGHT_VERSION
+        run: |
+          ver="$(sed -n 's/^GREENLIGHT_VERSION="\(.*\)"$/\1/p' greenlight.sh)"
+          [[ "$GITHUB_REF_NAME" == "v$ver" ]] || { echo "tag $GITHUB_REF_NAME != GREENLIGHT_VERSION $ver (use scripts/release.sh)"; exit 1; }
+      - name: notes from CHANGELOG.md
+        run: scripts/release-notes.sh "$GITHUB_REF_NAME" | tee notes.md
+      - name: create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --title "greenlight $GITHUB_REF_NAME" --notes-file notes.md --verify-tag
