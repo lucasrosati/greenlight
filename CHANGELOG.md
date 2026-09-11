@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.3.1 — 2026-09-11
 
 Runner robustness after two production failures: #1 — the runner died by a hard signal inside
 the babysit sleep, left `state/runner.pid` behind and nothing in the log said so; #3 — the CI

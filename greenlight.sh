@@ -56,7 +56,7 @@ source "$GREENLIGHT_DIR/lib/orca.sh"
 source "$GREENLIGHT_DIR/lib/checks.sh"
 
 # ---------------------------------------------------------------- configuration
-GREENLIGHT_VERSION="0.3.0"
+GREENLIGHT_VERSION="0.3.1"
 # Every setting is an env var. Paths default relative to the greenlight directory.
 REPO_DIR="${REPO_DIR:-}"                                   # target checkout (required)
 BASE_BRANCH="${BASE_BRANCH:-main}"
