@@ -26,6 +26,10 @@ if [[ -z "${CHECKS_JQ_FILTER:-}" ]]; then
   CHECKS_JQ_FILTER='capture("REQUIRED_CHECKS:[[:space:]]*\"(?<v>[^\"]*)\"").v | split(",")[] | gsub("^[[:space:]]+|[[:space:]]+$"; "")'
 fi
 REQUIRED_CHECKS="${REQUIRED_CHECKS:-}"
+# after `gh pr checks --watch` returns, check-runs chained on CI completion (workflow_run) may still
+# be starting on the sha: re-read while any is running, at most CHECKS_SETTLE_TRIES × CHECKS_SETTLE_SLEEP_S
+CHECKS_SETTLE_TRIES="${CHECKS_SETTLE_TRIES:-6}"
+CHECKS_SETTLE_SLEEP_S="${CHECKS_SETTLE_SLEEP_S:-10}"
 declare -a REQUIRED_CHECK_NAMES=()
 
 _checks_add_csv() { # _checks_add_csv "<a, b, c>" → appends trimmed non-empty names
@@ -69,10 +73,54 @@ checks_describe() { # one-line summary for dry-run output
   esac
 }
 
+checks_pending() { # checks_pending <check-runs json> → "a, b" of check-runs with status != completed ("" = none)
+  jq -r '[.[] | select(.status!="completed") | .name] | join(", ")' <<<"$1"
+}
+
+_checks_is_required() { # _checks_is_required <name> → 0 if the name is in REQUIRED_CHECK_NAMES
+  local c
+  for c in ${REQUIRED_CHECK_NAMES[@]+"${REQUIRED_CHECK_NAMES[@]}"}; do [[ "$c" == "$1" ]] && return 0; done
+  return 1
+}
+
+# checks_settle <sha> <pr> — re-reads the sha's check-runs while any is still running (bounded), dying
+# if the head moves meanwhile. Needs `sha_check_runs <sha>` and `pr_head_oid <pr>` from the caller.
+# Leaves the last JSON read in CHECKS_SETTLED_JSON (not printed: log lines would land in a `$( )`);
+# the caller passes it to checks_verify, which applies the policy for check-runs still running after
+# the window.
+CHECKS_SETTLED_JSON='[]'
+checks_settle() {
+  local sha="$1" pr="$2" tries=0 json pending sha2
+  while :; do
+    sha2="$(pr_head_oid "$pr")"
+    [[ "$sha2" == "$sha" ]] || die "head of PR #$pr moved DURING the gate (${sha:0:8} → ${sha2:0:8}); run again to validate the current head"
+    json="$(sha_check_runs "$sha")"
+    pending="$(checks_pending "$json")"
+    [[ -n "$pending" ]] || break
+    tries=$((tries + 1))
+    [[ $tries -le $CHECKS_SETTLE_TRIES ]] || break
+    log "late check-run(s) still running on ${sha:0:8} ($tries/$CHECKS_SETTLE_TRIES): $pending — waiting ${CHECKS_SETTLE_SLEEP_S}s"
+    sleep "$CHECKS_SETTLE_SLEEP_S"
+  done
+  CHECKS_SETTLED_JSON="$json"
+}
+
 checks_verify() { # checks_verify <check-runs json> <sha> <pr> — dies unless the gate passes
   local json="$1" sha="$2" pr="$3" failed pending
-  pending="$(jq -r '[.[] | select(.status!="completed") | .name] | join(", ")' <<<"$json")"
-  [[ -z "$pending" ]] || die "check-runs not yet completed on ${sha:0:8}: $pending"
+  pending="$(checks_pending "$json")"
+  if [[ -n "$pending" ]]; then
+    # still running after the settle window: by NAME, a non-required check-run must not block the
+    # handover (the operator chose the required set) — drop it with a warn; a required one is fatal.
+    # By COUNT the gate is "every check-run on the sha", so anything still running is fatal.
+    local n blocking=() ignored=()
+    while IFS= read -r n; do
+      [[ -n "$n" ]] || continue
+      if [[ ${#REQUIRED_CHECK_NAMES[@]} -gt 0 ]] && ! _checks_is_required "$n"; then ignored+=("$n"); else blocking+=("$n"); fi
+    done < <(jq -r '.[] | select(.status!="completed") | .name' <<<"$json")
+    [[ ${#blocking[@]} -eq 0 ]] || die "check-runs not yet completed on ${sha:0:8} (PR #$pr) after the settle window: ${blocking[*]}"
+    warn "ignoring non-required check-run(s) still running on ${sha:0:8} (PR #$pr) after the settle window: ${ignored[*]}"
+    json="$(jq '[.[] | select(.status=="completed")]' <<<"$json")"
+  fi
   failed="$(jq -r '[.[] | select(.conclusion!="success" and .conclusion!="skipped" and .conclusion!="neutral") | "\(.name)=\(.conclusion)"] | join(", ")' <<<"$json")"
   [[ -z "$failed" ]] || die "check-runs without success on ${sha:0:8} (PR #$pr): $failed"
   if [[ ${#REQUIRED_CHECK_NAMES[@]} -gt 0 ]]; then

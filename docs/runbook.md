@@ -122,6 +122,9 @@ included) · required checks resolved per `CHECKS_MODE` · `gh auth status`. Liv
 | `CI gate by COUNT` warn on every gate | `CHECKS_MODE=count` | expected in scratch repos; in production prefer `names` or `list` |
 | `CHECKS_JQ_FILTER produced no check names` | source file or filter changed | run `jq -rRs "$CHECKS_JQ_FILTER" $REPO_DIR/$CHECKS_SOURCE` by hand |
 | `head of PR moved DURING the gate` | concurrent push | rerun (redoes only the gate) |
+| `late check-run(s) still running on <sha> (n/N)` | a job chained on CI completion (`workflow_run`) started as `--watch` returned | not a failure: the gate re-reads for up to `CHECKS_SETTLE_TRIES × CHECKS_SETTLE_SLEEP_S` |
+| `ignoring non-required check-run(s) still running` warn | such a job outlived the settle window | not a failure by name (`names`/`list`); if it must gate, add it to the required set |
+| `check-runs not yet completed ... after the settle window` | a **required** check (or any, in `count` mode) still running after the window | raise `CHECKS_SETTLE_TRIES`; rerun redoes only the gate |
 | `babysit violated the clean-tree contract` | babysit changed files without commit/revert | read `logs/<TASK>-babysit-leftover.diff`; commit, push or discard by hand; the phase is still `gated`, so the rerun runs the babysit again (at least once) |
 | `handover: ... with N deferred finding(s)` | babysit deferred review findings to the author | not a failure: read the PR threads and decide before merging |
 | `gh pr view failed 5 times in a row` | gh/network/API down | warns from the 3rd; rerun resumes at `babysat` |
@@ -234,3 +237,6 @@ Checklist (any deviation is a finding):
 11. Runner alive: launch twice → the second dies in preflight with `another runner is alive
     (pid N, state/runner.pid) — stop it with: kill -TERM N`, exit 1; `state/runner.pid` still
     holds N and `state/heartbeat` is unchanged (the refused launch owns neither).
+12. Gate settle (no repo needed): `bash examples/smoke/checks-unit.sh` → 9 cases pass — late
+    non-required check completing inside the window (no warn), still running after it (warn +
+    OK), required still running (die), `count` mode (die), head moving inside the window (die).

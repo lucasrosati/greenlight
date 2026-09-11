@@ -2,9 +2,17 @@
 
 ## Unreleased
 
-Runner robustness after a production crash (#1): the runner died by a hard signal inside the
-babysit sleep, left `state/runner.pid` behind and nothing in the log said so.
+Runner robustness after two production failures: #1 — the runner died by a hard signal inside
+the babysit sleep, left `state/runner.pid` behind and nothing in the log said so; #3 — the CI
+gate aborted on a check-run created after `gh pr checks --watch` returned.
 
+- **Fixed (#3):** the gate read the sha's check-runs once after `--watch` and died on *any* run
+  still in progress — a job chained on CI completion (`workflow_run`: Slack notifiers, preview
+  deploys) is created at that exact moment, so any repo with one hit the race. The gate now
+  settles: re-reads while something is running, bounded by `CHECKS_SETTLE_TRIES ×
+  CHECKS_SETTLE_SLEEP_S` (default 6 × 10 s), re-checking the head each pass. After the window, by
+  `names`/`list` a **non-required** run still going is ignored with a warn; a required one (or
+  any, in `count` mode) is fatal as before. `examples/smoke/checks-unit.sh` covers it in CI.
 - **Added:** preflight pidfile check. A pidfile whose PID is alive aborts the launch (`another
   runner is alive (pid N) — stop it with: kill -TERM N`) instead of running two queues on the
   same `REPO_DIR`; a pidfile whose PID is gone is logged as `stale runner.pid …` with the last
