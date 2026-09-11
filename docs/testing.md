@@ -16,6 +16,7 @@ Everything referenced here is in [`examples/smoke/`](../examples/smoke/):
 | `stub-sync.sh` | `SYNC_COMMAND` stub — `ok` / `fail` / `dirty` modes |
 | `gh-flaky.sh` | `GH_BIN` wrapper that fails on demand (poll-failure ladder) |
 | `smoke.env.example` | the env file wiring all of the above |
+| `checks-unit.sh` | unit test of `lib/checks.sh` with stubbed GitHub calls — no repo, no network; CI runs it |
 
 ## 1. Create the scratch repo (once)
 

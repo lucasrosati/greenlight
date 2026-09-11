@@ -372,7 +372,10 @@ step_detect_pr() {
 # OF THAT sha via the API (not the PR rollup) and the gate fails if the head moves midway.
 # 1) wait for the sha's check-runs to EXIST (right after push/pr create the list is empty);
 # 2) gh pr checks --watch --fail-fast (red = abort the queue);
-# 3) validate by NAME (required checks present and success) or by COUNT (>= MIN_CHECKS, no failure).
+# 3) settle: re-read the sha's check-runs while a late one (workflow_run-chained on CI completion)
+#    is still running, bounded; the head must not move meanwhile;
+# 4) validate by NAME (required checks present and success; a non-required check-run still running
+#    after the settle window is ignored with a warn) or by COUNT (>= MIN_CHECKS, no failure, nothing running).
 # Exports GATED_SHA.
 pr_head_oid() { rgh pr view "$1" --json headRefOid --jq '.headRefOid'; }
 repo_slug() { rgh repo view --json nameWithOwner --jq '.nameWithOwner'; }
@@ -381,7 +384,7 @@ sha_check_runs() { # sha_check_runs <sha> → JSON [{name,status,conclusion}]
     --jq '[.check_runs[] | {name, status, conclusion}]' 2>/dev/null || echo '[]'
 }
 ci_gate() { # ci_gate <pr>
-  local pr="$1" tries=0 json n sha sha2
+  local pr="$1" tries=0 json n sha
   sha="$(pr_head_oid "$pr")"
   [[ -n "$sha" ]] || die "could not read headRefOid of PR #$pr"
   while :; do
@@ -397,10 +400,8 @@ ci_gate() { # ci_gate <pr>
   if ! rgh pr checks "$pr" --watch --fail-fast >>"$LOGS_DIR/$CUR_TASK-checks.log" 2>&1; then
     die "CI red on PR #$pr (gh pr checks $pr --watch --fail-fast); human intervention — see logs/$CUR_TASK-checks.log"
   fi
-  sha2="$(pr_head_oid "$pr")"
-  [[ "$sha2" == "$sha" ]] || die "head of PR #$pr moved DURING the gate (${sha:0:8} → ${sha2:0:8}); run again to validate the current head"
-  json="$(sha_check_runs "$sha")"
-  checks_verify "$json" "$sha" "$pr"
+  checks_settle "$sha" "$pr"   # re-reads the head too: moved → die
+  checks_verify "$CHECKS_SETTLED_JSON" "$sha" "$pr"
   GATED_SHA="$sha"
 }
 
@@ -581,7 +582,7 @@ dry_run_task() {
   3 task : perl -e 'alarm $TASK_TIMEOUT_S; exec @ARGV' $CLAUDE_BIN -p --settings $SETTINGS_FILE \\
              --permission-mode $CLAUDE_PERMISSION_MODE --output-format json${CLAUDE_EXTRA_ARGS:+ $CLAUDE_EXTRA_ARGS} < prompts/$t.md  (cwd=$REPO_DIR) > logs/$t.json
   4 pr   : PR_NUMBER=<n> from the last occurrence in .result; fallback gh pr list --author @me (head contains '$(tr '[:upper:]' '[:lower:]' <<<"$t")' and createdAt > start) → phase opened
-  5 ci   : check-runs of the head sha (API) + gh pr checks --watch --fail-fast; require: $(checks_describe) → phase gated
+  5 ci   : check-runs of the head sha (API) + gh pr checks --watch --fail-fast + settle ≤ $((CHECKS_SETTLE_TRIES * CHECKS_SETTLE_SLEEP_S))s for late check-runs; require: $(checks_describe) → phase gated
            orca comment "[$k/$n] $t: PR #<PR> opened, waiting for CI"
   6 baby : $baby → phase babysat
   7 hand : orca status in-review · comment "[$k/$n] PR #<PR> ($t) ready for your review/merge" (or "... ready, with <n> deferred finding(s) awaiting your judgment")

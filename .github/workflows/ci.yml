@@ -12,3 +12,5 @@ jobs:
         run: bash -n greenlight.sh lib/checks.sh lib/orca.sh examples/smoke/*.sh
       - name: shellcheck (errors only)
         run: shellcheck -S error greenlight.sh lib/checks.sh lib/orca.sh examples/smoke/*.sh
+      - name: lib/checks.sh unit (stubbed GitHub calls)
+        run: bash examples/smoke/checks-unit.sh

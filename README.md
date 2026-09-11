@@ -144,13 +144,16 @@ The gate is one function and its evidence is bound to a **sha**, not to the PR r
 1. Pin the PR's `headRefOid`.
 2. Wait for check-runs of that sha to **exist** (right after a push the list is empty).
 3. `gh pr checks --watch --fail-fast` (red aborts the queue; nothing reviews code that is still changing).
-4. Re-read the head; if it moved during the gate, abort and ask for a rerun.
+4. Settle: re-read the sha's check-runs while a late one is still running — a job chained on CI
+   completion (`workflow_run`) is created at the exact moment `--watch` returns — for at most
+   `CHECKS_SETTLE_TRIES × CHECKS_SETTLE_SLEEP_S` (default 60 s), re-reading the head on every
+   pass; if it moved during the gate, abort and ask for a rerun.
 5. Validate the check-runs of the pinned sha according to `CHECKS_MODE`:
 
 | mode | config | rule |
 |---|---|---|
-| `count` (default) | `MIN_CHECKS=1` | at least N `success`, none failed. Warns on every gate: a renamed or removed job still "passes". |
-| `names` | `CHECKS_SOURCE` (file in the target repo) + `CHECKS_JQ_FILTER` | each name must exist on the sha with `conclusion=success` |
+| `count` (default) | `MIN_CHECKS=1` | at least N `success`, none failed, nothing still running. Warns on every gate: a renamed or removed job still "passes". |
+| `names` | `CHECKS_SOURCE` (file in the target repo) + `CHECKS_JQ_FILTER` | each name must exist on the sha with `conclusion=success`; a **non-required** check-run still running after the settle window is ignored with a warn |
 | `list` | `REQUIRED_CHECKS="build,lint,e2e"` | same, from a literal list |
 
 A required check that is **absent** on the sha fails the gate. "Green by absence" is the failure
